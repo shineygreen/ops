@@ -33,9 +33,14 @@ Class SecurityGroupInfo:
         group or create a new one and return that. '''
         pass
 
+#####
+#
+#   This class handles data associated with the SecurityGroups associated with EC2.
+#
+#####
 
-Class SecurityGroup:
-    ''' Gather and hold the information on Security Groups. '''
+Class EC2SecurityGroup:
+    ''' Gather and hold the information on Security Groups associated with hosts.'''
     def __init__(self, aws_sg):
         self.aws_sg = aws_sg
         # Some data about the group is calculated. This structure
@@ -45,9 +50,12 @@ Class SecurityGroup:
         self.data['rule_count'] = 0
         self.data['world_access'] = False
         self.data['host_list'] = list()
-        self.data['elb_list'] = list()
+        #self.data['elb_list'] = list()
+        # Track the Security Groups listed in a Security Group so we can figure out
+        # Whether a group is referenced elsewhere.
         self.data['sg_list'] = list()
-        self.data['elasticache_list'] = list()
+        #self.data['elasticache_list'] = list()
+        gather_data(self)
 
     #
     # Factory Methods
@@ -69,34 +77,44 @@ Class SecurityGroup:
     #   Parsing Methods
     #
     def gather_data(self):
-        ''' Parse through the Security Group information and pull out interesting facts. '''
+        ''' Parse through the Security Group information and pull the number of rules listed in the group.
+            The IP addresses or Security Groups associated with each open port. The list of ports that are
+            opened by this group. And whether one of the IP addresses is 0.0.0.0/0, which opens a port to the
+            world.  '''
         rule_count = 0
-        # Pick up the incoming rules and ports
-        # The data structure returned by ip_permissions is a list with one or more
-        # dictionary entries
-        # The good stuff is associated with the keys FromPort and IpRanges
-        for port_data in self.aws_sg.ip_permissions:
+        # Count the ingress rules
+        # The data structure returned by ip_permissions is a list with one entry for each port opened.
+        # The port entries will have the port number and the list of IPRanges associated with that port.
+        # It will also have any Security Group ID's associated with the port listed under UserIdGroupPairs.
+
+        # Go through the list of rules associated with each port number and pull out data.
+        # We want a list of the ports that are open. We want to flag if a port is open to the world.
+        # We want to count how many rules are listed in the Security group, as there is a per group limit
+        # in VPC Security Groups.
+        for ingress_data in self.aws_sg.ip_permissions:
             if 'FromPort' in port_data:
-                this_group['port_list'].append(port_data['FromPort'])
-                ips = port_data['IpRanges']
-                if len(ips) > 0:
-                    # Not sure why they return a dict here.
-                    for ip_range_dict in ips:
-                        rule_count += 1
-                        ip_range = ip_range_dict['CidrIp']
-                        if ip_range == '0.0.0.0/0':
-                            this_group['world_access'] = True
-                if len(port_data['UserIdGroupPairs']) > 0:
-                    # Look for security groups to match on
-                    rule_count += 1
-                    for pair in port_data['UserIdGroupPairs']:
-                        ref_sg_id = pair['GroupId']
-                        ref_sg_group = get_sg_group(ref_sg_id)
-                        ref_sg_group['sg_list'].append(sg.id)
+                self.data['port_list'].append(port_data['FromPort'])
             else:
-                for ip_range_dict in port_data['IpRanges']:
-                    rule_count += 1
-                    ip_range = ip_range_dict['CidrIp']
-                    if ip_range == '0.0.0.0/0':
-                        this_group['world_access'] = True
+                print 'Odd Structure in EC2 Security Group %s' % self.aws_sg.groupid
+            # Count the number of IpRange rules and check for public addresses
+            for ips in ingress_data['IpRanges']:
+                rule_count += 1
+                ip_range = ip_range_dict['CidrIp']
+                if ip_range == '0.0.0.0/0':
+                    self.data['world_access'] = True
+            # These are the security groups allowed to access a port
+            for pair in ingress_data['UserIdGroupPairs']:
+                rule_count += 1
+                self.data['sg_list'] = pair['GroupId']
+
+        #
+        # Now count the egress rules. There is generally only one.
+        # This code is not tracking details on the exgress rules at the moment.
+        #
+        for egress_data in self.aws_sg.ip_permissions_egress:
+            for ip_range in egress_data['IpRanges']:
+                rule_count += 1
+            for group_pairs in ip_data['UserIdGroupPairs']:
+                rule_count += 1
+
         self.data['rule_count'] = rule_count
